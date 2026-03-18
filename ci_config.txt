@@ -1,0 +1,171 @@
+  # ── pytest.ini ──────────────────────────────────────────────────────────────
+# Drop this at project root alongside your test folder.
+
+[pytest]
+; Default CLI options applied to every run
+addopts =
+    -v
+    --tb=short
+    --strict-markers
+    --html=reports/test-report.html
+    --self-contained-html
+
+; Custom markers (avoids PytestUnknownMarkWarning)
+markers =
+    smoke:      Fast sanity checks — run on every push
+    regression: Full regression suite
+    slow:       Tests expected to take >1 s
+
+; Minimum pytest version
+minversion = 7.0
+
+; Where to look for tests
+testpaths = tests
+
+; Log settings (captured per test in CI output)
+log_cli       = true
+log_cli_level = INFO
+
+
+# ── requirements.txt ─────────────────────────────────────────────────────────
+# Save as requirements-test.txt and install with:
+#   pip install -r requirements-test.txt
+
+requests>=2.31.0
+pytest>=7.4.0
+pytest-html>=4.1.0
+pytest-xdist>=3.3.0        # parallel execution: pytest -n auto
+python-dotenv>=1.0.0        # load .env files in local dev
+
+
+# ── .env.example ─────────────────────────────────────────────────────────────
+# Copy to .env for local dev — never commit the real .env
+
+API_BASE_URL=https://jsonplaceholder.typicode.com
+API_TIMEOUT=10
+# API_TOKEN=your_token_here
+
+
+# ── GitHub Actions: .github/workflows/api-tests.yml ──────────────────────────
+
+name: API Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * *"      # Daily smoke run at 06:00 UTC
+
+jobs:
+  api-tests:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        environment: [staging, production]
+
+    env:
+      API_BASE_URL: ${{ matrix.environment == 'production'
+                        && secrets.PROD_API_URL
+                        || secrets.STAGING_API_URL }}
+      API_TOKEN:    ${{ secrets.API_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-test.txt
+
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      - name: Run smoke tests
+        run: pytest -m smoke --tb=short -q
+
+      - name: Run full test suite
+        run: pytest tests/ -n auto --html=reports/test-report-${{ matrix.environment }}.html
+
+      - name: Upload HTML report
+        if: always()                         # upload even on test failure
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ matrix.environment }}
+          path: reports/
+          retention-days: 14
+
+
+# ── GitLab CI: .gitlab-ci.yml ────────────────────────────────────────────────
+
+stages:
+  - test
+
+api-tests:
+  stage: test
+  image: python:3.11-slim
+  variables:
+    API_BASE_URL: $STAGING_API_URL
+    API_TOKEN:    $API_TOKEN
+  before_script:
+    - pip install -r requirements-test.txt
+    - mkdir -p reports
+  script:
+    - pytest tests/ -n auto --html=reports/test-report.html
+  artifacts:
+    when: always
+    paths:
+      - reports/
+    expire_in: 2 weeks
+  only:
+    - main
+    - merge_requests
+
+
+# ── Jenkins: Jenkinsfile (Declarative Pipeline) ───────────────────────────────
+
+pipeline {
+    agent any
+
+    environment {
+        API_BASE_URL = credentials('staging-api-url')
+        API_TOKEN    = credentials('api-token')
+    }
+
+    stages {
+        stage('Install') {
+            steps {
+                sh 'pip install -r requirements-test.txt'
+                sh 'mkdir -p reports'
+            }
+        }
+        stage('Smoke Tests') {
+            steps {
+                sh 'pytest -m smoke -q'
+            }
+        }
+        stage('Full Suite') {
+            steps {
+                sh 'pytest tests/ -n auto --html=reports/test-report.html'
+            }
+        }
+    }
+
+    post {
+        always {
+            publishHTML(target: [
+                reportName : 'API Test Report',
+                reportDir  : 'reports',
+                reportFiles: 'test-report.html',
+                keepAll    : true,
+            ])
+        }
+    }
+}

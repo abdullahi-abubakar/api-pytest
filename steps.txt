@@ -1,0 +1,23 @@
+# 1. Enter the folder
+cd path/to/api_tests
+
+# 2. Create the venv (once only)
+python3 -m venv myenv
+
+# 3. Activate it (every new terminal session)
+source myenv/bin/activate        # macOS/Linux
+myenv\Scripts\activate.bat       # Windows CMD
+
+# 4. Install packages (once only, or after requirements change)
+pip install -r requirements-test.txt
+
+# 5. Create the reports folder (once only)
+mkdir reports
+
+# 6. Run the tests
+pytest
+
+
+pytest -v or pytest test_posts.py -s
+
+pytest test_posts.py -s --html=reports/test-report.html --self-contained-html
